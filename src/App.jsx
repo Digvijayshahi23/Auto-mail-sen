@@ -81,6 +81,33 @@ export default function App() {
   const [excelConnecting, setExcelConnecting] = useState(false);
   const [excelMessage, setExcelMessage] = useState("");
 
+  const [activeOutreachTab, setActiveOutreachTab] = useState("email");
+
+  const getDraftForTab = (email, tab) => {
+    if (!email) return "";
+    if (email.metadata && email.metadata.outreachVersions) {
+      return email.metadata.outreachVersions[tab] || "";
+    }
+    if (tab === "email") return email.draftReply || "";
+    return "";
+  };
+
+  const handleOutreachTabChange = (tab) => {
+    if (selectedEmail) {
+      if (!selectedEmail.metadata) selectedEmail.metadata = {};
+      if (!selectedEmail.metadata.outreachVersions) {
+        selectedEmail.metadata.outreachVersions = {
+          email: selectedEmail.draftReply || "",
+          linkedin: "",
+          instagram: ""
+        };
+      }
+      selectedEmail.metadata.outreachVersions[activeOutreachTab] = editedDraft;
+    }
+    setActiveOutreachTab(tab);
+    setEditedDraft(getDraftForTab(selectedEmail, tab));
+  };
+
   const [semanticQuery, setSemanticQuery] = useState("");
   const [semanticResults, setSemanticResults] = useState([]);
 
@@ -140,12 +167,12 @@ export default function App() {
       if (emailsRes.length > 0) {
         if (!selectedEmail) {
           setSelectedEmail(emailsRes[0]);
-          setEditedDraft(emailsRes[0].draftReply || "");
+          setEditedDraft(getDraftForTab(emailsRes[0], activeOutreachTab));
         } else {
           const fresh = emailsRes.find((m) => m.id === selectedEmail.id);
           if (fresh) {
             setSelectedEmail(fresh);
-            setEditedDraft(fresh.draftReply || "");
+            setEditedDraft(getDraftForTab(fresh, activeOutreachTab));
           }
         }
       }
@@ -263,7 +290,7 @@ export default function App() {
         logEvent(`[Orchestrator] Email processing job scheduled in background queue.`);
         await fetchData(true);
         setSelectedEmail(email);
-        setEditedDraft(email.draftReply || "");
+        setEditedDraft(getDraftForTab(email, activeOutreachTab));
       }
     } catch (err) {
       logEvent("[Error] Neural classifier loop aborted with token errors.");
@@ -276,13 +303,28 @@ export default function App() {
   const handleSaveDraft = async () => {
     if (!selectedEmail) return;
     try {
+      const versions = selectedEmail.metadata?.outreachVersions || {
+        email: selectedEmail.draftReply || "",
+        linkedin: "",
+        instagram: ""
+      };
+      versions[activeOutreachTab] = editedDraft;
+
+      const updatedMetadata = {
+        ...selectedEmail.metadata,
+        outreachVersions: versions
+      };
+
       const res = await fetch(`/api/emails/${selectedEmail.id}/save-draft`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ draftReply: editedDraft })
+        body: JSON.stringify({ 
+          draftReply: versions.email,
+          metadata: updatedMetadata
+        })
       });
       if (res.ok) {
-        logEvent(`[Draft Studio] Saved physical adjustments for reply: "${selectedEmail.subject.substring(0, 20)}..."`);
+        logEvent(`[Draft Studio] Saved physical adjustments for outreach versions.`);
         fetchData(true);
       }
     } catch (err) {
@@ -697,7 +739,7 @@ export default function App() {
                                 key={m.id}
                                 onClick={() => {
                                   setSelectedEmail(m);
-                                  setEditedDraft(m.draftReply || "");
+                                  setEditedDraft(getDraftForTab(m, activeOutreachTab));
                                 }}
                                 className={`p-3.5 text-left cursor-pointer transition relative hover:bg-slate-800/40 ${
                                   isSelected ? "bg-slate-800/80 border-l-2 border-teal-400" : ""
@@ -888,10 +930,39 @@ export default function App() {
                             <div className="p-4 space-y-4">
                               {selectedEmail.draftReply ? (
                                 <div className="space-y-3">
+                                  {selectedEmail.id.startsWith("mail-excel") && (
+                                    <div className="flex border-b border-slate-800 mb-2">
+                                      <button
+                                        onClick={() => handleOutreachTabChange("email")}
+                                        className={`px-4 py-2 text-xs font-mono font-bold border-b-2 cursor-pointer transition ${
+                                          activeOutreachTab === "email" ? "border-teal-400 text-teal-400 bg-slate-900/30" : "border-transparent text-slate-400 hover:text-slate-200"
+                                        }`}
+                                      >
+                                        Gmail Outreach
+                                      </button>
+                                      <button
+                                        onClick={() => handleOutreachTabChange("linkedin")}
+                                        className={`px-4 py-2 text-xs font-mono font-bold border-b-2 cursor-pointer transition ${
+                                          activeOutreachTab === "linkedin" ? "border-teal-400 text-teal-400 bg-slate-900/30" : "border-transparent text-slate-400 hover:text-slate-200"
+                                        }`}
+                                      >
+                                        LinkedIn Connection Note
+                                      </button>
+                                      <button
+                                        onClick={() => handleOutreachTabChange("instagram")}
+                                        className={`px-4 py-2 text-xs font-mono font-bold border-b-2 cursor-pointer transition ${
+                                          activeOutreachTab === "instagram" ? "border-teal-400 text-teal-400 bg-slate-900/30" : "border-transparent text-slate-400 hover:text-slate-200"
+                                        }`}
+                                      >
+                                        Instagram DM
+                                      </button>
+                                    </div>
+                                  )}
+
                                   <textarea
                                     value={editedDraft}
                                     onChange={(e) => setEditedDraft(e.target.value)}
-                                    rows={10}
+                                    rows={12}
                                     placeholder="Verify or adjust the AI agent output response..."
                                     className="w-full bg-slate-950 text-slate-200 text-sm p-4 rounded-lg border border-slate-800 focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 leading-relaxed font-sans"
                                   />

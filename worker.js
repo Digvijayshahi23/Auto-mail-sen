@@ -238,7 +238,7 @@ Return JSON with exact keys:
         let prompt = '';
         if (isExcelLead) {
           prompt = `
-You are an expert B2B sales copywriter writing a highly personalized cold outreach email on behalf of Digvijay Shahi from MailPilot AI.
+You are an expert B2B sales copywriter writing highly personalized multi-channel outreach messages on behalf of Digvijay Shahi from MailPilot AI.
 
 Company Details:
 - Company Name: ${leadDetails.companyName}
@@ -248,9 +248,13 @@ Company Details:
 - LinkedIn: ${leadDetails.linkedin}
 - Phone: ${leadDetails.phone}
 
-Task: Write a personalized cold email targeting ${leadDetails.firstName}.
-Use this base template layout as a reference for the pitch and flow, but customize the body dynamically to highlight specific ways AI-powered automation (like customer support, lead qualification, appointment booking, or operations) can help their business:
+Task: Write a personalized multi-channel outreach campaign targeting ${leadDetails.firstName}.
+You must output a JSON object containing three distinct outreach versions:
+1. "email": A personalized cold email (under 150 words). Reference the email template below, but customize the body dynamically to highlight specific ways AI-powered automation can help their business.
+2. "linkedin": A short, highly personalized LinkedIn connection request note or DM (strictly under 300 characters/approx 50 words) to connect on LinkedIn. Keep it punchy and clear.
+3. "instagram": A short, friendly Instagram DM (under 200 characters/approx 30 words) pitching AI solutions.
 
+Reference Email Template:
 ---
 Subject: Quick idea for ${leadDetails.companyName}
 
@@ -283,21 +287,16 @@ ${leadDetails.linkedin ? 'LinkedIn: ' + leadDetails.linkedin : ''}
 ---
 
 Copywriting Requirements:
-- Mention the company name (${leadDetails.companyName}) naturally.
-- Reference their industry/category (${leadDetails.category}).
-- Explain how AI automation can help their specific business.
-- Mention AI customer support, lead qualification, appointment booking, and workflow automation only if relevant.
-- Keep the email under 150 words.
-- Sound human, not AI-generated.
-- End with a request for a 15-minute meeting.
-- Do not use generic sales language or exaggerate claims.
-- Do not leave any placeholder variables (like {{company_name}} or {{first_name}}) in the output. Make sure they are fully resolved.
-- End the output email with the exact signature block:
+- Sound human and authentic, not AI-generated. Avoid generic sales words or exaggerating.
+- Do not use placeholders (like {{company_name}} or {{first_name}}); they must be fully resolved.
+- For the email version, end it with this exact signature block:
 Best regards,
 Digvijay Shahi
 ${leadDetails.phone ? 'Phone: ' + leadDetails.phone : ''}
 ${leadDetails.website ? 'Website: ' + leadDetails.website : ''}
 ${leadDetails.linkedin ? 'LinkedIn: ' + leadDetails.linkedin : ''}
+- No markdown formatting like "**" or bold headers.
+- Do not use placeholders.
 `;
         } else {
           prompt = `
@@ -318,11 +317,38 @@ Requirements:
 `;
         }
 
-        const result = await gemini.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents: prompt
-        });
-        draftReply = result.text || "";
+        let result;
+        if (isExcelLead) {
+          result = await gemini.models.generateContent({
+            model: "gemini-3.5-flash",
+            contents: prompt,
+            config: {
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  email: { type: Type.STRING },
+                  linkedin: { type: Type.STRING },
+                  instagram: { type: Type.STRING }
+                },
+                required: ["email", "linkedin", "instagram"]
+              }
+            }
+          });
+          const parsed = JSON.parse(result.text || "{}");
+          draftReply = parsed.email || "";
+          metadata.outreachVersions = {
+            email: parsed.email || "",
+            linkedin: parsed.linkedin || "",
+            instagram: parsed.instagram || ""
+          };
+        } else {
+          result = await gemini.models.generateContent({
+            model: "gemini-3.5-flash",
+            contents: prompt
+          });
+          draftReply = result.text || "";
+        }
         addTrace(AgentType.ReplyGenerator, "AI Response Synthesized", "Draft reply successfully generated.");
       } catch (err) {
         console.error("Gemini draft generation failed:", err);
@@ -333,6 +359,12 @@ Requirements:
       // Fallback draft replies
       if (isExcelLead) {
         draftReply = `Subject: Quick idea for ${leadDetails.companyName}\n\nHi ${leadDetails.firstName},\n\nI came across ${leadDetails.companyName} and was impressed by your work in the ${leadDetails.category} space.\n\nI noticed there may be opportunities to streamline customer interactions, lead management, appointment scheduling, and repetitive workflows through AI-powered automation.\n\nAt MailPilot AI, we help businesses implement:\n\n• AI Customer Support Assistants\n• AI Receptionists & Appointment Booking\n• Lead Qualification & Follow-Up Automation\n• Workflow & Operations Automation\n• Custom AI Solutions Tailored to Business Needs\n\nBased on what I found about ${leadDetails.companyName}, I believe there could be a few areas where AI could save time, improve response rates, and enhance customer experience.\n\nI’d be happy to share a few ideas specific to your business.\n\nIf you’re interested, we can schedule a short 15–20 minute meeting where I’ll walk you through relevant use cases and explain our services in more detail.\n\nWould you be open to a quick conversation next week?\n\nBest regards,\nDigvijay Shahi\n${leadDetails.phone ? 'Phone: ' + leadDetails.phone : ''}\n${leadDetails.website ? 'Website: ' + leadDetails.website : ''}\n${leadDetails.linkedin ? 'LinkedIn: ' + leadDetails.linkedin : ''}`;
+        
+        metadata.outreachVersions = {
+          email: draftReply,
+          linkedin: `Hi ${leadDetails.firstName}, saw your work with ${leadDetails.companyName} in the ${leadDetails.category} space. Let's connect here!`,
+          instagram: `Hi ${leadDetails.firstName}! Impressed by ${leadDetails.companyName}. Do you need help implementing AI customer support or lead follow-ups?`
+        };
       } else if (category === "support") {
         draftReply = `Dear customer,\n\nThank you for reaching out to MailPilot Support. We have received your query regarding "${email.subject}".\n\nBased on our system records: if you are encountering integration discrepancies, please verify the OAuth token scopes in your connections tab.\n\nSincerely,\nThe MailPilot Support Team`;
       } else {

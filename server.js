@@ -199,12 +199,20 @@ app.delete('/api/emails/:id', checkAuth, async (req, res) => {
 // 4. Save Edited Draft
 app.post('/api/emails/:id/save-draft', checkAuth, async (req, res) => {
   const { id } = req.params;
-  const { draftReply } = req.body;
+  const { draftReply, metadata } = req.body;
   try {
-    const result = await pool.query(
-      'UPDATE emails SET draft_reply = $1, status = \'DRAFT\', "updatedAt" = NOW() WHERE id = $2 RETURNING *',
-      [draftReply, id]
-    );
+    let result;
+    if (metadata) {
+      result = await pool.query(
+        'UPDATE emails SET draft_reply = $1, metadata = $2, status = \'DRAFT\', "updatedAt" = NOW() WHERE id = $3 RETURNING *',
+        [draftReply, JSON.stringify(metadata), id]
+      );
+    } else {
+      result = await pool.query(
+        'UPDATE emails SET draft_reply = $1, status = \'DRAFT\', "updatedAt" = NOW() WHERE id = $2 RETURNING *',
+        [draftReply, id]
+      );
+    }
     if (result.rowCount === 0) {
       return res.status(404).json({ error: "Email not found." });
     }
