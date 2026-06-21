@@ -71,6 +71,25 @@ export function startWorker(io) {
     }
     const email = emailRes.rows[0];
 
+    const lines = email.body.split('\n');
+    const getField = (name) => {
+      const line = lines.find(l => l.toLowerCase().startsWith(name.toLowerCase() + ':'));
+      return line ? line.substring(name.length + 1).trim() : '';
+    };
+
+    const isExcelLead = email.id.startsWith('mail-excel') || email.body.includes('Lead Source: Connected Spreadsheet');
+    const leadDetails = {};
+    if (isExcelLead) {
+      leadDetails.companyName = getField('Institute Name') || getField('Company') || getField('Name') || 'your company';
+      leadDetails.category = getField('Category') || getField('Type') || 'your industry';
+      leadDetails.website = getField('Website') || '';
+      leadDetails.phone = getField('Phone') || '';
+      leadDetails.linkedin = getField('LinkedIn') || '';
+      const founder = getField('Founder') || getField('Director') || '';
+      leadDetails.founderName = founder;
+      leadDetails.firstName = founder ? founder.split(' ')[0] : 'there';
+    }
+
     // Initial state definitions
     let status = 'DRAFT';
     let category = 'sales';
@@ -190,11 +209,15 @@ Return JSON with exact keys:
     );
 
     // --- Agent 5: Research Agent ---
-    metadata.researchSummary = `Company details retrieved for domain: ${email.fromAddress.split('@')[1]}. Active technology stack verified.`;
+    if (isExcelLead) {
+      metadata.researchSummary = `Company profile loaded for ${leadDetails.companyName} (${leadDetails.website}). Priority status set to ${priority}. Pain points identified: ${getField('Pain Points') || 'N/A'}.`;
+    } else {
+      metadata.researchSummary = `Company details retrieved for domain: ${email.fromAddress.split('@')[1]}. Active technology stack verified.`;
+    }
     addTrace(
       AgentType.ResearchAgent,
       "Company Profile Scraping",
-      `Researched domain. Verified series funding / stack profiles.`
+      isExcelLead ? `Loaded sheet data. Parsed pain points and AI Opportunities.` : `Researched domain. Verified series funding / stack profiles.`
     );
 
     // --- Agent 6: Knowledge Retrieval Agent ---
@@ -209,9 +232,75 @@ Return JSON with exact keys:
     // --- Agent 7: Reply Generator ---
     if (gemini) {
       try {
-        addTrace(AgentType.ReplyGenerator, "Synthesizing AI Response Draft", "Generating polite response based on RAG FAQ references.", "info");
+        addTrace(AgentType.ReplyGenerator, "Synthesizing AI Response Draft", isExcelLead ? "Generating personalized sales outreach email." : "Generating polite response based on RAG FAQ references.", "info");
         const groundingText = docs.map(d => d.contentText).join("\n\n");
-        const prompt = `
+        
+        let prompt = '';
+        if (isExcelLead) {
+          prompt = `
+You are an expert B2B sales copywriter writing a highly personalized cold outreach email on behalf of Digvijay Shahi from MailPilot AI.
+
+Company Details:
+- Company Name: ${leadDetails.companyName}
+- Website: ${leadDetails.website}
+- Industry: ${leadDetails.category}
+- Target Recipient: ${leadDetails.founderName} (First Name: ${leadDetails.firstName})
+- LinkedIn: ${leadDetails.linkedin}
+- Phone: ${leadDetails.phone}
+
+Task: Write a personalized cold email targeting ${leadDetails.firstName}.
+Use this base template layout as a reference for the pitch and flow, but customize the body dynamically to highlight specific ways AI-powered automation (like customer support, lead qualification, appointment booking, or operations) can help their business:
+
+---
+Subject: Quick idea for ${leadDetails.companyName}
+
+Hi ${leadDetails.firstName},
+
+I came across ${leadDetails.companyName} and was impressed by your work in the ${leadDetails.category} space.
+
+I noticed there may be opportunities to streamline customer interactions, lead management, appointment scheduling, and repetitive workflows through AI-powered automation.
+
+At MailPilot AI, we help businesses implement:
+• AI Customer Support Assistants
+• AI Receptionists & Appointment Booking
+• Lead Qualification & Follow-Up Automation
+• Workflow & Operations Automation
+• Custom AI Solutions Tailored to Business Needs
+
+Based on what I found about ${leadDetails.companyName}, I believe there could be a few areas where AI could save time, improve response rates, and enhance customer experience.
+
+I’d be happy to share a few ideas specific to your business.
+
+If you’re interested, we can schedule a short 15–20 minute meeting where I’ll walk you through relevant use cases and explain our services in more detail.
+
+Would you be open to a quick conversation next week?
+
+Best regards,
+Digvijay Shahi
+${leadDetails.phone ? 'Phone: ' + leadDetails.phone : ''}
+${leadDetails.website ? 'Website: ' + leadDetails.website : ''}
+${leadDetails.linkedin ? 'LinkedIn: ' + leadDetails.linkedin : ''}
+---
+
+Copywriting Requirements:
+- Mention the company name (${leadDetails.companyName}) naturally.
+- Reference their industry/category (${leadDetails.category}).
+- Explain how AI automation can help their specific business.
+- Mention AI customer support, lead qualification, appointment booking, and workflow automation only if relevant.
+- Keep the email under 150 words.
+- Sound human, not AI-generated.
+- End with a request for a 15-minute meeting.
+- Do not use generic sales language or exaggerate claims.
+- Do not leave any placeholder variables (like {{company_name}} or {{first_name}}) in the output. Make sure they are fully resolved.
+- End the output email with the exact signature block:
+Best regards,
+Digvijay Shahi
+${leadDetails.phone ? 'Phone: ' + leadDetails.phone : ''}
+${leadDetails.website ? 'Website: ' + leadDetails.website : ''}
+${leadDetails.linkedin ? 'LinkedIn: ' + leadDetails.linkedin : ''}
+`;
+        } else {
+          prompt = `
 Write a professional business response email.
 Inbound Email:
 From: ${email.fromAddress}
@@ -227,6 +316,8 @@ Requirements:
 - No markdown formatting like "**" or bold headers.
 - Do not use placeholders.
 `;
+        }
+
         const result = await gemini.models.generateContent({
           model: "gemini-3.5-flash",
           contents: prompt
@@ -240,7 +331,9 @@ Requirements:
 
     if (!draftReply) {
       // Fallback draft replies
-      if (category === "support") {
+      if (isExcelLead) {
+        draftReply = `Subject: Quick idea for ${leadDetails.companyName}\n\nHi ${leadDetails.firstName},\n\nI came across ${leadDetails.companyName} and was impressed by your work in the ${leadDetails.category} space.\n\nI noticed there may be opportunities to streamline customer interactions, lead management, appointment scheduling, and repetitive workflows through AI-powered automation.\n\nAt MailPilot AI, we help businesses implement:\n\n• AI Customer Support Assistants\n• AI Receptionists & Appointment Booking\n• Lead Qualification & Follow-Up Automation\n• Workflow & Operations Automation\n• Custom AI Solutions Tailored to Business Needs\n\nBased on what I found about ${leadDetails.companyName}, I believe there could be a few areas where AI could save time, improve response rates, and enhance customer experience.\n\nI’d be happy to share a few ideas specific to your business.\n\nIf you’re interested, we can schedule a short 15–20 minute meeting where I’ll walk you through relevant use cases and explain our services in more detail.\n\nWould you be open to a quick conversation next week?\n\nBest regards,\nDigvijay Shahi\n${leadDetails.phone ? 'Phone: ' + leadDetails.phone : ''}\n${leadDetails.website ? 'Website: ' + leadDetails.website : ''}\n${leadDetails.linkedin ? 'LinkedIn: ' + leadDetails.linkedin : ''}`;
+      } else if (category === "support") {
         draftReply = `Dear customer,\n\nThank you for reaching out to MailPilot Support. We have received your query regarding "${email.subject}".\n\nBased on our system records: if you are encountering integration discrepancies, please verify the OAuth token scopes in your connections tab.\n\nSincerely,\nThe MailPilot Support Team`;
       } else {
         draftReply = `Dear customer,\n\nThank you for your interest in MailPilot. We have logged your request regarding "${email.subject}" and our team is evaluating details.\n\nTo schedule a sync, please use our alignment booking link: https://calendly.com/mailpilot/sales-sync\n\nWarm regards,\nThe MailPilot Sales Team`;
@@ -301,8 +394,8 @@ Requirements:
 
     // Write final output to postgres database
     await pool.query(
-      'UPDATE emails SET status = \'DRAFT\', priority = $1, sentiment = $2, category = $3, draft_reply = $4, intent_summary = $5, agent_traces = $6, metadata = $7, "updatedAt" = NOW() WHERE id = $8',
-      [priority, sentiment, category, draftReply, intentSummary, JSON.stringify(traces), JSON.stringify(metadata), emailId]
+      'UPDATE emails SET status = \'DRAFT\', priority = $1, sentiment = $2, category = $3, draft_reply = $4, intent_summary = $5, agent_traces = $6, metadata = $7, subject = $8, "updatedAt" = NOW() WHERE id = $9',
+      [priority, sentiment, category, draftReply, intentSummary, JSON.stringify(traces), JSON.stringify(metadata), isExcelLead ? `Quick idea for ${leadDetails.companyName}` : email.subject, emailId]
     );
 
     // Write record to ai_generations
