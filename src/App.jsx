@@ -77,6 +77,10 @@ export default function App() {
   const [newWfUrgency, setNewWfUrgency] = useState("any");
   const [newWfAction, setNewWfAction] = useState("auto_draft");
 
+  const [excelUrl, setExcelUrl] = useState("");
+  const [excelConnecting, setExcelConnecting] = useState(false);
+  const [excelMessage, setExcelMessage] = useState("");
+
   const [semanticQuery, setSemanticQuery] = useState("");
   const [semanticResults, setSemanticResults] = useState([]);
 
@@ -211,6 +215,37 @@ export default function App() {
       }
     } catch (err) {
       logEvent("[Error] Failed to inject dynamic inbound simulated email.");
+    }
+  };
+
+  // Connect and import leads from Excel online spreadsheet link
+  const handleConnectExcel = async (e) => {
+    e.preventDefault();
+    if (!excelUrl) return;
+    setExcelConnecting(true);
+    setExcelMessage("");
+    logEvent(`[Excel Ingestor] Connecting to Excel Online sheet...`);
+    try {
+      const res = await fetch('/api/integrations/excel/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: excelUrl })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setExcelMessage(`Connected successfully! Imported and enqueued ${data.count} leads.`);
+        logEvent(`[Excel Ingestor] Connected! Imported ${data.count} leads from spreadsheet.`);
+        fetchData(true);
+        setExcelUrl("");
+      } else {
+        setExcelMessage(`Connection failed: ${data.error}`);
+        logEvent(`[Error] Excel integration failed: ${data.error}`);
+      }
+    } catch (err) {
+      setExcelMessage("Connection timeout or server offline.");
+      logEvent("[Error] Excel connection exception.");
+    } finally {
+      setExcelConnecting(false);
     }
   };
 
@@ -1524,6 +1559,51 @@ export default function App() {
                             </div>
                           ))}
                         </div>
+                      </div>
+
+                      {/* Excel & Spreadsheet Ingestors */}
+                      <div className="bg-slate-900 border border-slate-800 rounded-lg p-5 space-y-4 md:col-span-2">
+                        <div className="flex items-center justify-between border-b border-slate-850 pb-3">
+                          <div className="flex items-center space-x-2">
+                            <FileText className="text-teal-400" size={18} />
+                            <h3 className="text-xs font-bold uppercase tracking-wider text-white">
+                              Enterprise Excel & SharePoint Spreadsheet Ingestors
+                            </h3>
+                          </div>
+                        </div>
+
+                        <p className="text-xs text-slate-400">
+                          Paste a public Excel Online / SharePoint sharing link to download, parse, and ingest contacts dynamically into the AI queue.
+                        </p>
+
+                        <form onSubmit={handleConnectExcel} className="space-y-3">
+                          <div className="flex gap-2">
+                            <input
+                              type="url"
+                              required
+                              placeholder="https://rishihoodeduin-my.sharepoint.com/:x:/g/..."
+                              value={excelUrl}
+                              onChange={(e) => setExcelUrl(e.target.value)}
+                              className="flex-1 bg-slate-950 border border-slate-800 rounded px-3 py-2 text-xs placeholder-slate-650 focus:outline-none focus:border-teal-500 text-slate-200"
+                            />
+                            <button
+                              type="submit"
+                              disabled={excelConnecting}
+                              className="bg-teal-600 hover:bg-teal-500 disabled:bg-slate-800 text-slate-950 disabled:text-slate-500 text-xs font-bold py-2 px-5 rounded transition cursor-pointer active:scale-95 flex items-center gap-1.5"
+                            >
+                              {excelConnecting ? "Connecting..." : "Connect Excel Sheet"}
+                            </button>
+                          </div>
+                          {excelMessage && (
+                            <div className={`text-xs font-mono p-2.5 rounded border ${
+                              excelMessage.includes('failed') || excelMessage.includes('timeout')
+                                ? "bg-rose-500/10 text-rose-455 border-rose-500/20"
+                                : "bg-emerald-500/10 text-emerald-450 border-emerald-500/20"
+                            }`}>
+                              {excelMessage}
+                            </div>
+                          )}
+                        </form>
                       </div>
 
                     </div>

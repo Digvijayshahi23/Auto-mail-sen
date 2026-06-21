@@ -9,6 +9,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
 import { createServer as createViteServer } from 'vite';
+import * as XLSX from 'xlsx';
 import pool from './db.js';
 import { startWorker } from './worker.js';
 
@@ -437,6 +438,158 @@ app.post('/api/integrations/inbox/add', checkAuth, async (req, res) => {
     const inboxesRes = await pool.query('SELECT * FROM email_accounts');
     res.json({ success: true, inboxes: inboxesRes.rows });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Excel / SharePoint bulk leads importer API
+app.post('/api/integrations/excel/import', checkAuth, async (req, res) => {
+  const { url } = req.body;
+  if (!url) {
+    return res.status(400).json({ error: "Excel/SharePoint URL is required" });
+  }
+
+  try {
+    // 1. Convert SharePoint / Excel Online url to a direct download link using layouts layout if personal/sites link
+    let downloadUrl = url;
+    try {
+      const urlObj = new URL(url);
+      const origin = urlObj.origin;
+      
+      const personalMatch = url.match(/\/personal\/([^/]+)\/([^/?]+)/);
+      const sitesMatch = url.match(/\/sites\/([^/]+)\/([^/?]+)/);
+      
+      if (personalMatch) {
+        downloadUrl = `${origin}/personal/${personalMatch[1]}/_layouts/15/download.aspx?share=${personalMatch[2]}`;
+      } else if (sitesMatch) {
+        downloadUrl = `${origin}/sites/${sitesMatch[1]}/_layouts/15/download.aspx?share=${sitesMatch[2]}`;
+      } else if (url.includes('sharepoint.com') && !url.includes('download=1')) {
+        urlObj.searchParams.set('download', '1');
+        downloadUrl = urlObj.toString();
+      }
+    } catch (e) {
+      console.warn("URL parsing/conversion error:", e.message);
+    }
+
+    console.log(`Downloading Excel online file from: ${downloadUrl}`);
+
+    const response = await fetch(downloadUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Spreadsheet download failed. Status code: ${response.status}`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    // 2. Load workbook and worksheets
+    const workbook = XLSX.read(buffer, { type: 'buffer' });
+    const sheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+    if (rows.length < 2) {
+      return res.status(400).json({ error: "Excel sheet has no data records." });
+    }
+
+    // 3. Scan column headers for mapping
+    const headers = rows[0].map(h => String(h || '').trim().toLowerCase());
+    
+    let fromIdx = headers.findIndex(h => h === 'email' || h.includes('email') || h.includes('address') || h.includes('from') || h.includes('contact'));
+    if (fromIdx === -1) {
+      // Find column containing '@' in first data row as fallback
+      const sampleRow = rows[1] || [];
+      fromIdx = sampleRow.findIndex(cell => String(cell || '').includes('@'));
+    }
+    if (fromIdx === -1) fromIdx = 0; // standard fallback
+
+    let subIdx = headers.findIndex(h => h.includes('subject') || h.includes('title') || h.includes('topic'));
+    let bodyIdx = headers.findIndex(h => h.includes('body') || h.includes('content') || h.includes('text') || h.includes('message'));
+    let prioIdx = headers.findIndex(h => h.includes('priority') || h.includes('urgency'));
+    let catIdx = headers.findIndex(h => h.includes('category') || h.includes('type'));
+    
+    // Other useful header indices
+    let instNameIdx = headers.findIndex(h => h.includes('institute') || h.includes('company') || h.includes('name'));
+
+    const importedEmails = [];
+    const emailAccountId = 'fbd7fbec-6c1d-45ea-95c7-3fa5c69154da';
+
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row || row.length === 0) continue;
+
+      const fromAddress = String(row[fromIdx] || '').trim();
+      if (!fromAddress || !fromAddress.includes('@')) continue;
+
+      // Construct a dynamic subject line
+      let subject = 'No Subject';
+      if (subIdx !== -1 && row[subIdx]) {
+        subject = String(row[subIdx]).trim();
+      } else if (instNameIdx !== -1 && row[instNameIdx]) {
+        const instName = String(row[instNameIdx]).trim();
+        let catText = '';
+        if (catIdx !== -1 && row[catIdx]) {
+          catText = ` (${String(row[catIdx]).trim()})`;
+        }
+        subject = `New Lead: ${instName}${catText}`;
+      } else {
+        subject = `Imported Lead: ${fromAddress.split('@')[0]}`;
+      }
+
+      // Construct a dynamic body containing all row values formatted as key-value pairs
+      let body = '';
+      if (bodyIdx !== -1 && row[bodyIdx]) {
+        body = String(row[bodyIdx]).trim();
+      } else {
+        // Construct detailed key-value body
+        const lines = [];
+        lines.push("Lead Source: Connected Spreadsheet");
+        for (let col = 0; col < headers.length; col++) {
+          const headerName = rows[0][col] || `Column ${col + 1}`;
+          const cellValue = row[col];
+          if (cellValue !== undefined && cellValue !== null && String(cellValue).trim() !== '') {
+            lines.push(`${headerName}: ${String(cellValue).trim()}`);
+          }
+        }
+        body = lines.join('\n');
+      }
+
+      let priority = 'MEDIUM';
+      if (prioIdx !== -1 && row[prioIdx]) {
+        const val = String(row[prioIdx]).toUpperCase();
+        if (['HIGH', 'MEDIUM', 'LOW'].includes(val)) priority = val;
+      }
+
+      let category = 'sales';
+      if (catIdx !== -1 && row[catIdx]) {
+        category = String(row[catIdx]).toLowerCase();
+      }
+
+      const id = `mail-excel-${Date.now()}-${i}-${Math.floor(Math.random() * 1000)}`;
+      const messageId = `msg_excel_${Date.now()}_${i}_${Math.floor(Math.random() * 100000)}`;
+      const threadId = `th_excel_${Date.now()}_${i}_${Math.floor(Math.random() * 10000)}`;
+
+      const insertQuery = `
+        INSERT INTO emails (id, "emailAccountId", "messageId", "threadId", subject, body, "fromAddress", "toAddress", status, priority, sentiment, "isRead", "createdAt", "updatedAt", category)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'SYNCED', $9, 'NEUTRAL', false, NOW(), NOW(), $10)
+        RETURNING *
+      `;
+
+      const dbRes = await pool.query(insertQuery, [id, emailAccountId, messageId, threadId, subject, body, fromAddress, 'sales@mailpilot.ai', priority, category]);
+      const newEmail = dbRes.rows[0];
+
+      // Automatically trigger 12-Agent worker queue process
+      await emailQueue.add('process-email', { emailId: newEmail.id });
+      importedEmails.push(newEmail);
+    }
+
+    res.json({ success: true, count: importedEmails.length, message: `Successfully connected Excel Online sheet and enqueued ${importedEmails.length} contacts for processing.` });
+  } catch (err) {
+    console.error("Excel import error:", err);
     res.status(500).json({ error: err.message });
   }
 });
