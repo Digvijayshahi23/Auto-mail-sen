@@ -1,0 +1,47 @@
+{
+  "clerkConnected": true,
+  "crm": {
+    "hubspot": {
+      "connected": true,
+      "apiKey": "pat-na1-mock-key-for-development-purposes-only",
+      "status": "Active"
+    },
+    "salesforce": {
+      "connected": false,
+      "status": "Idle"
+    },
+    "zoho": {
+      "connected": true,
+      "apiKey": "zoho-oauth-token-stale-reauth-required",
+      "status": "Stale Token (401)"
+    },
+    "pipedrive": {
+      "connected": false,
+      "status": "Idle"
+    }
+  },
+  "scheduler": {
+    "calendly": {
+      "connected": true,
+      "link": "https://calendly.com/mailpilot/sales-sync",
+      "activeEvents": [
+        "Sales Alignment",
+        "API Troubleshooting"
+      ]
+    },
+    "calcom": {
+      "connected": true,
+      "link": "https://cal.com/mailpilot/onboarding",
+      "activeEvents": [
+        "Product Demo",
+        "Partner Call"
+      ]
+    }
+  },
+  "billing": {
+    "plan": "Pro",
+    "emailsSentCount": 1420,
+    "agentRunsCount": 8940,
+    "billingLimit": 15000
+  }
+}

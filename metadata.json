@@ -1,0 +1,8 @@
+{
+  "name": "MailPilot AI",
+  "description": "Your Autonomous AI Email Operations Team with multi-agent orchestration, CRM synchronization, calendar scheduling, and automated draft routing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
